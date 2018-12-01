@@ -37,22 +37,47 @@ The first state variable is `request_status`.  This is simply a `TEXT` column in
 
 All rows written to the table would have a default `request_status` of `new`.  As the requests are chosen (more to come), the row is updated to `in-progress`.  Upon completion of the request, the row would then settle to the value of either `complete` or `error`, depending on the outcome.
 
-The second state variable is `process_id`.  This is also a `TEXT` column and would represent the "identity" of the process responsible for implementing the request.  This value ultimately is a GUID, generated at run-time for each request being processed (more to come on that as well).
+The second state variable is `process_id`.  This is also a `TEXT` column and would represent the "identity" of the process responsible for implementing the request.  This value ultimately is a UUID, generated at run-time for each request being processed (more to come on that as well).
 
 There are additional columns such as the URL to the spreadsheet, the identity of spreadsheet, the type of request (create/update), and various other relevant pieces of information.  The two state variables described previously are ubiquitous for any process that follows this pattern.
 
 ```sql
 CREATE TABLE spreadsheets.request_queue (
-  request_queue_id BIGINT NOT NULL DEFAULT nextval('spreadsheets.request_queue_id_seq'),
+  request_queue_id BIGINT NOT NULL DEFAULT NEXTVAL('spreadsheets.request_queue_id_seq'),
   request_status TEXT NOT NULL DEFAULT 'new',
   request_type TEXT NOT NULL DEFAULT 'create',
   process_id TEXT,
-  spreadsheet_id TEXT NOT NULL
+  spreadsheet_id TEXT NOT NULL,
+  CONSTRAINT PRIMARY KEY (request_queue_id),
+  CONSTRAINT CHECK (
+    request_status IN (
+      'complete',
+      'error',
+      'in-progress',
+      'new'
+    )
+  ),
+  CONSTRAINT CHECK (
+    request_type IN (
+      'create',
+      'update'
+    )
+  )
+);
+
+CREATE UNIQUE INDEX request_queue_01
+ON spreadsheets.request_queue (
+  spreadsheet_id, request_type
 )
+WHERE (
+  request_type = 'create'
+);
 ```
 
+The constraints above provide some basic data integrity at the database layer.  Additionally, the sparse unique index ensures that only one `create` request can exist for any one spreadsheet.
+
 # Communication Channel
-The new "front-end" application is be able to receive any number of concurrent requests to either create or update a worksheet and then executes an `INSERT` statement to create a row in the SQL table described above, where the request is in `new` status.
+The new "front-end" application is be able to receive any number of concurrent requests to either create or update a worksheet.  For each such request, it then executes an `INSERT` statement to create a row in the SQL table described above, where the request (by default) is in `new` status.
 
 ```sql
 INSERT INTO spreadsheets.request_queue (
@@ -62,23 +87,23 @@ INSERT INTO spreadsheets.request_queue (
 VALUES (
   'create', -- could be 'update' also
   '9s9has9d81hd0a0891h0d90a881840f' -- the identity of the google spreadsheet
-)
+);
 ```
 
 In addition, the "front-end" executes a `NOTIFY` statement to "awaken" the "back-end" application, causing it to start searching for work.
 
 ```sql
-NOTIFY spreadsheet_request_queue
+NOTIFY spreadsheets_request_queue;
 ```
 
 The "back-end" application is idle throughout the day until a user requests a spreadsheet to be created or updated.  When this occurs, a row is written to the SQL table.  The "back-end" application is made aware of the new row by having executed a `LISTEN` statement on the same topic as used by the `NOTIFY` statement.
 
 This is a simplistic mechanism to implement an asynchronous communication channel between the "front-end" and "back-end" applications.  The channel name can be a string of your choosing, with some limitations regarding white space and special characters.  No additional setup is needed to create a channel.
 
-It is important to note that only currently connected clients which are already listening for a message to appear on the topic will receive that notification.  At first blush, you may think that some information is lost if the "back-end" is offline.  As you'll come to find out this is simplistic, lossy communication channel is perfectly suited for this design.
+It is important to note that only currently connected clients which are already listening for a message to appear on the topic will receive that notification.  At first blush, you may think that some information is lost if the "back-end" is offline.  As you'll come to find out this simplistic, asynchronous, lossy communication channel is perfectly suited for this event-driven design.
 
 # Priming the Pump
-The "back-end" application is designed to run independently of the "front-end" application.  It can be offline indefinitely.
+The "back-end" application is designed to run independently of the "front-end" application.  It can be offline indefinitely.  This means that even if the requests are not being processed because the "back-end" is not running, requests to be processed are still being captured by the "front-end" application.  While it will appear that the system is not responsive during the outage, no requests will be lost.
 
 As and when the "back-end" application starts, the first thing the "back-end" application does is to execute the `LISTEN` statement and create an event listener.  Using the `pg` module, this is easily done with the `on` method of the client which is consistently connected to the Postgres database where the SQL table lives.
 
@@ -90,7 +115,7 @@ const client = new Client();
 client.on('notification', async () => { ... });
 
 // begin listening for notifications on the communication channel
-client.query('LISTEN spreadsheet_request_queue');
+client.query('LISTEN spreadsheets_request_queue');
 ```
 
 From that point on, the "back-end" application will receive any new notifications created by way of the `NOTIFY` statement executed by the "front-end" application.  But what if the "back-end" application has been offline for some time, you ask?
@@ -99,7 +124,7 @@ In addition to executing the `LISTEN` statement to receive any new notifications
 
 ```javascript
 // prime the pump
-client.query('NOTIFY spreadsheet_request_queue');
+client.query('NOTIFY spreadsheets_request_queue');
 ```
 
 # Commitment Control
@@ -108,14 +133,16 @@ To ensure database integrity, the "back-end" application uses commitment control
 To implement commitment control, the "back-end" application executes the `BEGIN` statement and uses `COMMIT` and `ROLLBACK` as needed, depending on the outcome of various actions.
 
 ```sql
-BEGIN -- start commitment control
-COMMIT -- make changes permanent
-ROLLBACK -- undo any pending changes
+BEGIN; -- start commitment control
+COMMIT; -- make changes permanent
+ROLLBACK; -- undo any pending changes
 ```
 
 Using commitment control also means that if the "back-end" application dies suddenly for any reason (server outage, unexpected run time error, out of memory condition, etc), uncommitted changes will also be _automatically_ rolled-back by the database manager.
 
-This assures there will never be a row caught in a zombie-like state where it is always `in-progress`.
+This assures there will never be a row caught in a zombie-like state where it is always `in-progress`.  Any row which was once `new` will always settle to `complete` or `error`, depending on the outcome.  If any unexpected error occurs, any row which was _temporarily_ transitioned to `in-progress` will assuredly be reverted to its original `new` state.
+
+This does mean the application must be willing and able to tolerate the possibility that a spreadsheet was _partially_ created or updated.  This is not an inherent flaw in this distributed lock state machine; it is just a consequence that googleapis and spreadsheet interactions are not also under commitment control.  In later sections, you'll learn how when combined with your existing database tables, the distribute lock state machine implementation also cleanly handles and corrects partial transactions.
 
 # Searching for Work
 When the "back-end" application is awakened by a notification that some new request is ready to be processed, it first generates a process identifier that is unique against all other parallel processes.
@@ -150,7 +177,7 @@ WHERE (request_queue_id) = (
 RETURNING
   request_queue_id,
   request_type,
-  spreadsheet_id
+  spreadsheet_id;
 ```
 
 This statement has two critically important concepts that need to be understood.
@@ -164,7 +191,7 @@ Next, the "line-in-the-sand":
 
 At application start-up the "line-in-the-sand" is the value `0`.  The table is setup such that the system-generated identity values begin at the value `1` and increase as each row is written to the table.  This will become more clear next.
 
-Recall that commitment control is in effect, so this row which is found and updated is only temporarily updated (not yet permanent) **and** it is _locked_ to the process which updated the row.  This ensures that no other process can update the row until the row is either committed or the transaction is rolled-back.
+Recall that commitment control is in effect, so this row which is found and updated is only temporarily updated (not yet permanent) **and** it is _locked_ to the process which updated the row.  This ensures that no other process can update the row until the changes are either committed or the transaction is rolled-back.
 
 # Validation and Grouping Requests
 The searched-update statement above will blindly update any row that meets the criteria.  This means that the `request_type` could be either `create` or `update`.  Depending on the outcome, the "back-end" application performs additional validations and grouping.
@@ -187,7 +214,7 @@ WHERE (
   AND request_type = 'create'
   AND request_status NOT IN ('complete', 'error')
 )
-FOR UPDATE NOWAIT
+FOR UPDATE NOWAIT;
 ```
 
 Examining the clause:
@@ -196,7 +223,7 @@ Examining the clause:
 This statement will throw an exception (SQL State `55P03`) if the `create` request for the same `spreadsheet_id` is locked to another process.  This means that the `create` is still being worked on by a parallel process!  When this occurs, the "back-end" application rolls-back the prior `UPDATE` and **skips** the row.
 
 ```sql
-ROLLBACK
+ROLLBACK;
 ```
 
 The `ROLLBACK` statement resets the state of the previously updated row to `new` so it may be worked on again in the future.  Additionally, the "line-in-the-sand" value alluded to earlier is updated to the identity of the row the "back-end" application already looked at.
@@ -210,7 +237,7 @@ To accomplish this, another searched-update is performed:
 ```sql
 UPDATE spreadsheets.request_queue
 SET
-  processor_id = $1 -- the same UUID assigned to the process
+  processor_id = $1, -- the same UUID assigned to the process
   request_status = 'in-progress'
 WHERE (
   request_queue_id IN (
@@ -224,7 +251,7 @@ WHERE (
     )
     FOR UPDATE NOWAIT
   )
-)
+);
 ```
 
 In the above `UPDATE` statement, all the outstanding `update` requests for the same spreadsheet found to be worked on will be _allocated_ to the same processor id (UUID).
@@ -232,6 +259,42 @@ In the above `UPDATE` statement, all the outstanding `update` requests for the s
 As before, the `FOR UPDATE NOWAIT` clause will cause the statement to fail if there is a conflict.  This will occur if there is a concurrent instance of the "back-end" application already updating the spreadsheet.
 
 If this statement fails, then as before a `ROLLBACK` will occur and the "line-in-the-sand" will be set to the identity of the request found previously.
+
+# Using `child_process`
+The "back-end" application also implements its own memory-isolation strategy when constructing and working with spreadsheets.  The main thread is responsible for have one consistent connection to the database so that it can always receive a notification through the `LISTEN` and `NOTIFY` mechanisms described earlier.  When such a notification comes through, the application uses the `child_process` module of Node.js to fork a sub-process to begin the worksheet processing activities.
+
+```javascript
+const { fork } = require('child_process');
+
+const path = `${__dirname}/request-dispatcher`;
+const args = [JSON.stringify(requestOptions)];
+const options = {
+  cwd: process.cwd(),
+  env: process.env
+};
+
+const cp = fork(path, args, options);
+
+// deal with errors
+cp.on('error', (error) => { ... });
+
+// capture the outcome
+cp.on('message' (outcome) => { ... });
+
+// deal with abnormal exit and decide what to do with the outcome
+cp.on('exit', (code) => { ... });
+```
+
+In the sub-process, the actual spreadsheet creation or updating occurs.  It receives the identity of the spreadsheet and what action to take against it through the arguments array so it can begin working straightaway.  As and when the request completes normally, the sub-process sends back a "message" to the main thread, while at the same time, the main thread is already monitoring for the sub-process to "exit", success or failure.
+
+```javascript
+const [options] = process.argv.slice(2);
+const requestOptions = JSON.parse(options);
+
+// do some magic with spreadsheets via googleapis
+
+process.send(outcome);
+```
 
 # Progressing Through the Requests
 If the transaction is not rolled-back, then the "back-end" application has successfully allocated either a single `create` request or one or many `update` requests of the same spreadsheet id.  The spreadsheet is then created or updated accordingly.
@@ -244,7 +307,7 @@ SET
   request_status = 'complete' -- or 'error', if there is one
 WHERE (
   process_id = $1 -- the same UUID assigned to the process
-)
+);
 ```
 
 The above searched `UPDATE` statement will update all the request(s) that were previously locked to the process by the identity generated at run-time.  This will either be the single `create` request or one or many `update` requests to the same spreadsheet.
@@ -252,7 +315,7 @@ The above searched `UPDATE` statement will update all the request(s) that were p
 At this point, the "back-end" application can safely commit its changes.
 
 ```sql
-COMMIT
+COMMIT;
 ```
 
 The "back-end" application iterates through the data by beginning again with a search for the _first_ outstanding `new` request but this time the search begins _after_ the `request_queue_id` found previously.
@@ -264,9 +327,9 @@ What happens if there are rows skipped?  How will the "back-end" application be 
 
 To handle this, the "back-end" application makes the assumption that if _any_ request to `create` or `update` is found and processed, then it is _possible_ another concurrent processor was forced to skip a row that should have been processed.
 
-Thus, the "back-end" application iterates until no more rows are returned by the search **and** no work is actually performed.  After each complete turn of looking through the request table, the "line-in-the-sand" state variable will reset to its initial value of `0` and all possible rows which are in `new` status will be again examined.
+Thus, the "back-end" application iterates until no more rows are returned by the search **and** no work is actually performed.  After each complete turn of looking through the request table, the "line-in-the-sand" state variable will reset to its initial value of `0` and if any rows were locked in the prior iteration, all possible rows which are in `new` status will be again examined.
 
-Only then will the "back-end" application enter an idle state, waiting once more for the `NOTIFY` statement to be executed by the "front-end" application when a user makes a new request to either `create` or `update` a spreadsheet.
+Only if the "back-end" application can successfully read all rows in `new` status without performing additional work will it enter an idle state, waiting once more for the `NOTIFY` statement to be executed by the "front-end" application when a user makes a new request to either `create` or `update` a spreadsheet.
 
 # Detailed Explanation Example
 Let's now visualize with an example of how the flow works.  Consider the following image:
@@ -283,15 +346,15 @@ In the example, `Process A` is awakened by a `NOTIFY` statement from the "front-
 
 That row is updated to `in-progress` and is locked to `Process A`.
 
-Similarly, `Process B` is awakened by a `NOTIFY` statement, or perhaps it just happens to come online after some requests are already present in the table.  When it awakens, it too will find the _first_ row where the `request_status` is `new`.  Since `Process A` has already locked the first row, it finds the second row.
+Similarly, `Process B` is awakened by a `NOTIFY` statement, or perhaps it just happens to come online after some requests are already present in the table.  When it awakens, it too will find the _first_ row where the `request_status` is `new`.  Since `Process A` has already locked the first row, the first row is skipped and it finds the second row.
 
-The second row in the table is an `update` request for the same spreadsheet that `Process A` is working on.  When `Process B` gets the `update` request, it validates the `create` request for the same spreadsheet is complete.
+The second row in the table is an `update` request for the same spreadsheet that `Process A` is working on.  When `Process B` gets the `update` request, it checks whether the `create` request for the same spreadsheet is complete.
 
 In this example, that is not the case since `Process A` is still running.  As a result, `Process B` receives a row-lock exception identified with SQL state `55P03`.  Thus, `Process B` performs a `ROLLBACK` statement and advances its "line-in-the-sand" to identity `2`, the first row it found to work on.  `Process B` then iterates and finds the next row, identity `3`.
 
 Again, in this example, `Process A` is still in the process of creating the spreadsheet, so again `Process B` must abort trying to `update` the spreadsheet since it receives a row-lock exception when trying to validate the `create` request is completed.  The "line-in-the-sand" for `Process B` advances to identity `3`.
 
-On the next iteration for `Process B`, it skips identity `4` because it is already `complete`.  It then discovers and locks identity `5` and determines it to be an `update` request.  `Process B` successfully validates the `create` request is complete and also successfully identifies all the related `update` requests for the same spreadsheet.  All the outstanding `update` requests are allocated to `Process B` by performing the searched-update to update the status for all related spreadsheet identities.
+On the next iteration for `Process B`, it skips identity `4` because it is already `complete`.  It then discovers and locks identity `5` and determines it to be an `update` request.  `Process B` successfully validates the `create` request is complete and also successfully identifies and locks all the related `update` requests for the same spreadsheet.  All the outstanding `update` requests are allocated to `Process B` by performing the searched-update to update the status for all related spreadsheet identities.
 
 Since both `Process A` and `Process B` found work, they _assume_ they _probably_ blocked another process from performing work they have found.  So, both those processes will iterate through the remainder of the table by advancing with the "line-in-the-sand" concept until no more rows are found.  Since they assume some rows were probably skipped, they start again from the beginning and either `Process A` or `Process B` will find the skipped rows and process them.
 
@@ -312,6 +375,6 @@ One practical example is aggregating data from multiple disparate sources into a
 
 In the past, I have used this technique to intercept changes to 17 different tables containing lots of different pieces of information regarding customer orders including addresses, names, phone numbers, ad-hoc warranty notes, items and item information, and so on.
 
-Using the same technique described above, a queue-like table was developed and 17 SQL triggers were attached to the source tables, which in turn wrote to the table.  The applications which were updating these various tables were never made aware of these triggers and were also not impacted by the replication process.  Writing an additional row in-line with a transaction is very lightweight so the original applications were not burdened by the change.  The background process had the burden of understanding what to do with those changes.
+Using the same technique described above, a queue-like table was developed and 17 SQL triggers were attached to the source tables, which in turn wrote to the table.  The applications which were updating these various tables were never made aware of these triggers and were also not impacted by the replication process.  Moreover, the applications that were updating those tables were quite old and monolithic in nature, so adding replication or message propagation logic to those legacy applications was neither feasible nor desirable.  Writing an additional row in-line with a transaction is very lightweight so the original applications were not burdened by the change.  The background process had the burden of understanding what to do with those changes.
 
 The background process in this case read those entries from the history log and scraped all the relevant information about the customer order and created entries in another table which provided a massively powerful capability to search against bits of data about the order.  The net result was a Google-like query engine, searching against 2 billion rows of textual data that gave the business the ability to find any order of interest in a sub-second.  Prior to this new system, the business literally would spend hours and even days trying to find just one order so that warranty information could be located and appropriate customer interaction taken.
