@@ -42,13 +42,14 @@ The second state variable is `process_id`.  This is also a `TEXT` column and wou
 There are additional columns such as the URL to the spreadsheet, the identity of spreadsheet, the type of request (create/update), and various other relevant pieces of information.  The two state variables described previously are ubiquitous for any process that follows this pattern.
 
 ```sql
+CREATE SEQUENCE spreadsheets.request_queue_id_seq;
+
 CREATE TABLE spreadsheets.request_queue (
-  request_queue_id BIGINT NOT NULL DEFAULT NEXTVAL('spreadsheets.request_queue_id_seq'),
+  request_queue_id BIGINT NOT NULL PRIMARY KEY DEFAULT NEXTVAL('spreadsheets.request_queue_id_seq'),
   request_status TEXT NOT NULL DEFAULT 'new',
   request_type TEXT NOT NULL DEFAULT 'create',
   process_id TEXT,
   spreadsheet_id TEXT NOT NULL,
-  CONSTRAINT PRIMARY KEY (request_queue_id),
   CONSTRAINT CHECK (
     request_status IN (
       'complete',
