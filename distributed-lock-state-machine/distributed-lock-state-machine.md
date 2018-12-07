@@ -105,7 +105,7 @@ It is important to note that only currently connected clients which are already 
 # Priming the Pump
 The "back-end" application is designed to run independently of the "front-end" application.  It can be offline indefinitely.  This means that even if the requests are not being processed because the "back-end" is not running, requests to be processed are still being captured by the "front-end" application.  While it will appear that the system is not responsive during the outage, no requests will be lost.
 
-As and when the "back-end" application starts, the first thing the "back-end" application does is to execute the `LISTEN` statement and create an event listener.  Using the `pg` module, this is easily done with the `on` method of the client which is consistently connected to the Postgres database where the SQL table lives.
+As and when the "back-end" application starts, one of the first things the "back-end" application does is execute the `LISTEN` statement and create an event listener.  Using the `pg` module, this is easily done with the `on` method of the client which is consistently connected to the Postgres database where the SQL table lives.
 
 ```javascript
 const { Client } = require('pg');
@@ -142,7 +142,7 @@ Using commitment control also means that if the "back-end" application dies sudd
 
 This assures there will never be a row caught in a zombie-like state where it is always `in-progress`.  Any row which was once `new` will always settle to `complete` or `error`, depending on the outcome.  If any unexpected error occurs, any row which was _temporarily_ transitioned to `in-progress` will assuredly be reverted to its original `new` state.
 
-This does mean the application must be willing and able to tolerate the possibility that a spreadsheet was _partially_ created or updated.  This is not an inherent flaw in this distributed lock state machine; it is just a consequence that googleapis and spreadsheet interactions are not also under commitment control.  In later sections, you'll learn how when combined with your existing database tables, the distribute lock state machine implementation also cleanly handles and corrects partial transactions.
+This does mean the application must be willing and able to tolerate the possibility that a spreadsheet was _partially_ created or updated.  This is not an inherent flaw in this distributed lock state machine; it is just a consequence that googleapis and spreadsheet interactions are not also under commitment control.  In later sections, you'll learn how when combined with your existing database tables, the distributed lock state machine implementation also cleanly handles and corrects partial transactions.
 
 # Searching for Work
 When the "back-end" application is awakened by a notification that some new request is ready to be processed, it first generates a process identifier that is unique against all other parallel processes.
