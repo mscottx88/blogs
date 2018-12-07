@@ -1,30 +1,22 @@
 # Implementing a Distributed Lock State Machine
 Recently, I've been working with applications that construct Google Sheets with user-driven data.  The spreadsheet link is given to the user and the users can update the contents of the worksheet followed by clicking a hyperlink to effectively "send back" the data to the server for processing.
 
-When the application was first built, I relied on a simplifying assumption that it was okay for just one worksheet to be built or updated at any one time.  This was easily accomplished by limiting the number of instances of the application to a single copy (**single-point of failure**) and using a state variable that indicated whether a request was in progress (**bottleneck**).
+In this article, you'll learn how I combined various technologies like Postgres, SQL and Node.js and created an application which implements a Distributed Lock State Machine.
 
-You don't have to be a rocket scientist to know that model would not serve the business needs for very long.  The system needed to overcome these two limitations:
+Here is the gist of the setup:
+* A "front-end" application, which is responsible for receiving and recording requests to either `create` or `update` a spreadsheet
+* A "back-end" application that uses SQL and commitment control to locate, process, and finalize the outcome of the requests for future logging
 
-1) No single-point of failure
-2) No bottleneck
+Each application is independently scalable and run in a distributed cloud computing environment.
 
-What was needed was a mechanism where a _request_ to create or update a worksheet could be recorded and processed at a later time.
+The two components communicate via a "hand-off plane" and a simplistic event-driven communication channel.
 
-# Splitting the Application
-The first step to achieve the goals was to split the application.  In its original form, the application had both a "front-end" component and a "back-end" component.
+Here is a high-level overview of how the components interact:
 
-The "front-end" component of the application was a Node.js application running an Express server housed in a Docker image running in a Kubernetes cluster on Google Cloud Platform.  The "back-end" component ran in the same application and was responsible for implementing the creation of the worksheet and the updating of the data in the source database.
-
-By limiting the number of pods to one, and combined with the in progress state variable, the application was able to implement the previous restrictions: only one worksheet could be created or updated at one time.
-
-To overcome the limitations, the application needed to be able to run any number of scalable instances of either the "front-end" or the "back-end" components as needed.
-
-Thus, two separate Node.js applications were created from one.  The "front-end" component continued to be an Express server and the "back-end" became a new application that was solely responsible for creating and updating worksheets.
-
-The next task was to create a hand-off plane between the two.
+<img src="./flowchart.jpg" />
 
 # Creating the Hand-off Plane
-With the new setup, users could make a request to create a worksheet or update an existing worksheet by making a call to the Express server.  The Express server would (in addition to validation, JWT authentication, etc) create an entry in a new SQL table which contains the sufficient information to be acted upon later.
+When a user requests a spreadsheet to be `created` or `updated`, a REST call is made to the "front-end" application, which is ultimately a Node.js Express server.  The Express server then (in addition to validation, JWT authentication, etc) creates an entry in an SQL table.  The newly created row contains the sufficient information to be acted upon later.
 
 This SQL table has a couple key columns which are important in understanding the state machine implementation.
 
@@ -78,7 +70,7 @@ WHERE (
 The constraints above provide some basic data integrity at the database layer.  Additionally, the sparse unique index ensures that only one `create` request can exist for any one spreadsheet.
 
 # Communication Channel
-The new "front-end" application is be able to receive any number of concurrent requests to either create or update a worksheet.  For each such request, it then executes an `INSERT` statement to create a row in the SQL table described above, where the request (by default) is in `new` status.
+The "front-end" application is be able to receive any number of concurrent requests to either `create` or `update` a spreadsheet.  For each such request, it then executes an `INSERT` statement to create a row in the SQL table described above, where the request (by default) is in `new` status.
 
 ```sql
 INSERT INTO spreadsheets.request_queue (
@@ -155,7 +147,7 @@ const processId = uuid();
 
 Then, the "back-end" application executes a searched `UPDATE` statement.  In this searched update, the "back-end" application is looking for the _first_ request in `new` status (which it has not already seen before- more to come).
 
-Since the table also has a system-generated, ever-increasing unique identifier, the order of the rows is easily controlled.
+Since the table also has a system-generated, ever-increasing unique identifier, the order of the rows is easily controlled.  By ordering on the request identifier, the application processes the requests in FIFO order.
 
 ```sql
 UPDATE spreadsheets.request_queue
@@ -335,7 +327,7 @@ Only if the "back-end" application can successfully read all rows in `new` statu
 # Detailed Explanation Example
 Let's now visualize with an example of how the flow works.  Consider the following image:
 
-<img src="./lock-example.jpg">
+<img src="./lock-example.jpg" />
 
 The arrow on the left is the order in which rows will be found by way of the `ORDER BY` clause, specified in the searched-update.
 
@@ -379,3 +371,6 @@ In the past, I have used this technique to intercept changes to 17 different tab
 Using the same technique described above, a queue-like table was developed and 17 SQL triggers were attached to the source tables, which in turn wrote to the table.  The applications which were updating these various tables were never made aware of these triggers and were also not impacted by the replication process.  Moreover, the applications that were updating those tables were quite old and monolithic in nature, so adding replication or message propagation logic to those legacy applications was neither feasible nor desirable.  Writing an additional row in-line with a transaction is very lightweight so the original applications were not burdened by the change.  The background process had the burden of understanding what to do with those changes.
 
 The background process in this case read those entries from the history log and scraped all the relevant information about the customer order and created entries in another table which provided a massively powerful capability to search against bits of data about the order.  The net result was a Google-like query engine, searching against 2 billion rows of textual data that gave the business the ability to find any order of interest in a sub-second.  Prior to this new system, the business literally would spend hours and even days trying to find just one order so that warranty information could be located and appropriate customer interaction taken.
+
+# Upcoming Article
+In an upcoming article, I'll dive deep into how I built the Google Spreadsheets, exploring the `googleapis` npm module and devising solutions to adhere to rate limited quotas through request batching.
