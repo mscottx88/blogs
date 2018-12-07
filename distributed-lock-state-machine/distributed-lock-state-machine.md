@@ -253,42 +253,6 @@ As before, the `FOR UPDATE NOWAIT` clause will cause the statement to fail if th
 
 If this statement fails, then as before a `ROLLBACK` will occur and the "line-in-the-sand" will be set to the identity of the request found previously.
 
-# Using `child_process`
-The "back-end" application also implements its own memory-isolation strategy when constructing and working with spreadsheets.  The main thread is responsible for maintaining one consistent connection to the database so that it can always receive a notification through the `LISTEN` and `NOTIFY` mechanisms described earlier.  When such a notification comes through, the application uses the `child_process` module of Node.js to fork a sub-process to begin the worksheet processing activities.
-
-```javascript
-const { fork } = require('child_process');
-
-const path = `${__dirname}/request-dispatcher`;
-const args = [JSON.stringify(requestOptions)];
-const options = {
-  cwd: process.cwd(),
-  env: process.env
-};
-
-const cp = fork(path, args, options);
-
-// deal with errors
-cp.on('error', (error) => { ... });
-
-// capture the outcome
-cp.on('message' (outcome) => { ... });
-
-// deal with abnormal exit and decide what to do with the outcome
-cp.on('exit', (code) => { ... });
-```
-
-In the sub-process, the actual spreadsheet creation or updating occurs.  It receives the identity of the spreadsheet and what action to take against it through the arguments array so it can begin working straightaway.  As and when the request completes normally, the sub-process sends back a "message" to the main thread, while at the same time, the main thread is already monitoring for the sub-process to "exit", success or failure.
-
-```javascript
-const [options] = process.argv.slice(2);
-const requestOptions = JSON.parse(options);
-
-// do some magic with spreadsheets via googleapis
-
-process.send(outcome);
-```
-
 # Progressing Through the Requests
 If the transaction is not rolled-back, then the "back-end" application has successfully allocated either a single `create` request or one or many `update` requests of the same spreadsheet id.  The spreadsheet is then created or updated accordingly.
 
