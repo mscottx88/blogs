@@ -9,7 +9,7 @@ Here is the gist of the setup:
 
 Each application is independently scalable and run in a distributed cloud computing environment.
 
-The two components communicate via a "hand-off plane" and a simplistic event-driven communication channel.
+The two components communicate via a "hand-off plane", which is an SQL table.  Additionally, a simplistic event-driven notification system is employed via two SQL statements issued against the Postgres server.
 
 Here is a high-level overview of how the components interact:
 
