@@ -262,7 +262,7 @@ As before, the `FOR UPDATE NOWAIT` clause will cause the statement to fail if th
 If this statement fails, then as before a `ROLLBACK` will occur and the "line-in-the-sand" will be set to the identity of the request found previously.
 
 # Using `child_process`
-The "back-end" application also implements its own memory-isolation strategy when constructing and working with spreadsheets.  The main thread is responsible for have one consistent connection to the database so that it can always receive a notification through the `LISTEN` and `NOTIFY` mechanisms described earlier.  When such a notification comes through, the application uses the `child_process` module of Node.js to fork a sub-process to begin the worksheet processing activities.
+The "back-end" application also implements its own memory-isolation strategy when constructing and working with spreadsheets.  The main thread is responsible for maintaining one consistent connection to the database so that it can always receive a notification through the `LISTEN` and `NOTIFY` mechanisms described earlier.  When such a notification comes through, the application uses the `child_process` module of Node.js to fork a sub-process to begin the worksheet processing activities.
 
 ```javascript
 const { fork } = require('child_process');
