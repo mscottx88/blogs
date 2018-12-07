@@ -286,7 +286,7 @@ To handle this, the "back-end" application makes the assumption that if _any_ re
 
 Thus, the "back-end" application iterates until no more rows are returned by the search **and** no work is actually performed.  After each complete turn of looking through the request table, the "line-in-the-sand" state variable will reset to its initial value of `0` and if any rows were locked in the prior iteration, all possible rows which are in `new` status will be again examined.
 
-Only if the "back-end" application can successfully read all rows in `new` status without performing additional work will it enter an idle state, waiting once more for the `NOTIFY` statement to be executed by the "front-end" application when a user makes a new request to either `create` or `update` a spreadsheet.
+Only when the "back-end" application finds zero rows in `new` status will it enter an idle state.  At which time, it will wait once more for the `NOTIFY` statement to be executed by the "front-end" application when a user makes a new request to either `create` or `update` a spreadsheet.
 
 # Detailed Explanation Example
 Let's now visualize with an example of how the flow works.  Consider the following image:
