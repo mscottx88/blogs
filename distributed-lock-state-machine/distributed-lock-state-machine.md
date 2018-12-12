@@ -153,7 +153,7 @@ const processId = uuid();
 ```
 
 **Note**
-There is a caveat to this approach.  It is entirely possible, although statistically impossible that two UUIDs can ever be created.  If this is a concern, another approach to obtain a truly unique identifier is through a sequence object in the database itself.  However, that has the drawback of additional database calls, entities, and permissions.
+There is a caveat to this approach.  It is entirely possible, although statistically impossible that two, duplicated UUID values can ever be created.  If this is a concern, another approach to obtain a truly unique identifier is through a sequence object in the database itself.  However, that has the drawback of additional database calls, entities, and permissions.
 
 Once the process identifier is generated, the "back-end" application executes a searched `UPDATE` statement.  In this searched update, the "back-end" application is looking for the _first_ request in `new` status (which it has not already seen before- more to come).
 
