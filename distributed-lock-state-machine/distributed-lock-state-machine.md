@@ -1,7 +1,14 @@
 # Implementing a Distributed Lock State Machine
-Recently, I've been working with applications that construct Google Sheets with user-driven data.  The spreadsheet link is given to the user and the users can update the contents of the worksheet followed by clicking a hyperlink to effectively "send back" the data to the server for processing.
+A complex distributed computing problem application developers may encounter is controlling access to a resource or entity in a multi-user, concurrent environment.  How can we guard against an arbitrary number of concurrent processes from potentially mutating or even having any access to an entity simultaneously?  One possible solution is to rely on database management systems which provide concurrency safeguards via ACID transactions and row-level locking.
 
 In this article, you'll learn how I combined various technologies like Postgres, SQL and Node.js and created an application which implements a Distributed Lock State Machine.
+
+In understanding the approaches taken here, you'll learn how commitment control, isolation levels, and ACID transaction guarantees can be applied to implement a distributed lock state machine.  In this context, "distributed" means multiple concurrent processes.  The "lock" is the safety mechanism that safeguards against concurrent processes from gaining access to shared resources or entities simultaneously.  Finally, "state machine" means those concurrent processes will have the ability to identify a resource or entity in a specific state (e.g. `new`, `in-progress`), perform some work or processing on them, and transition them to a final, settled state (e.g. `complete`, `error`).
+
+At the end, I'll provide additional examples of the implementation that can be applied to achieve robust data aggregation and replication without requiring changes to your existing applications.
+
+# An Example Use-Case
+Recently, I've been working with applications that construct Google Sheets with user-driven data.  The spreadsheet link is given to the user and the users can update the contents of the worksheet followed by clicking a hyperlink to effectively "send back" the data to the server for processing.
 
 Here is the gist of the setup:
 * A "front-end" application, which is responsible for receiving and recording requests to either `create` or `update` a spreadsheet
@@ -9,7 +16,7 @@ Here is the gist of the setup:
 
 Each application is independently scalable and run in a distributed cloud computing environment.
 
-The two components communicate via a "hand-off plane", which is an SQL table.  Additionally, a simplistic event-driven notification system is employed via two SQL statements issued against the Postgres server.
+The two components communicate via a "hand-off plane", which is an SQL table.  Additionally, a simple, event-driven notification system is employed via two SQL statements issued against the Postgres server.
 
 Here is a high-level overview of how the components interact:
 
@@ -131,21 +138,24 @@ COMMIT; -- make changes permanent
 ROLLBACK; -- undo any pending changes
 ```
 
-Using commitment control also means that if the "back-end" application dies suddenly for any reason (server outage, unexpected run time error, out of memory condition, etc), uncommitted changes will also be _automatically_ rolled-back by the database manager.
+Using commitment control also means that if the "back-end" application dies suddenly for any reason (server outage, unexpected run time error, out of memory condition, etc), uncommitted changes will also be _automatically_ rolled-back by the database manager.  This assures there will never be a row caught in a zombie-like state where it is always `in-progress`.  Any row which was once `new` will always settle to `complete` or `error`, depending on the outcome.  If any unexpected error occurs, any row which was _temporarily_ transitioned to `in-progress` will assuredly be reverted to its original `new` state.
 
-This assures there will never be a row caught in a zombie-like state where it is always `in-progress`.  Any row which was once `new` will always settle to `complete` or `error`, depending on the outcome.  If any unexpected error occurs, any row which was _temporarily_ transitioned to `in-progress` will assuredly be reverted to its original `new` state.
-
-This does mean the application must be willing and able to tolerate the possibility that a spreadsheet was _partially_ created or updated.  This is not an inherent flaw in this distributed lock state machine; it is just a consequence that googleapis and spreadsheet interactions are not also under commitment control.  In later sections, you'll learn how when combined with your existing database tables, the distributed lock state machine implementation also cleanly handles and corrects partial transactions.
+This does mean the application must be willing and able to tolerate the possibility that a spreadsheet was _partially_ created or updated.  This is not an inherent flaw in this distributed lock state machine; it is just a consequence that `googleapis` calls and spreadsheet interactions are not also under commitment control.  In later sections, you'll learn how when combined with your existing database tables, the distributed lock state machine implementation also cleanly handles and corrects partial transactions.
 
 # Searching for Work
-When the "back-end" application is awakened by a notification that some new request is ready to be processed, it first generates a process identifier that is unique against all other parallel processes.
+When the "back-end" application is awakened by a notification that some new request is ready to be processed, it first generates a process identifier that is unique against all other parallel processes.  This can be achieved in a number of ways.
+
+A simple, distributed approach is to create a UUID, which can give you a _theoretically_ globally unique value in a distributed computing environment.  In this example, I used the popular npm package `uuid` and the specific `v4` implementation.
 
 ```javascript
 const uuid = require('uuid/v4');
 const processId = uuid();
 ```
 
-Then, the "back-end" application executes a searched `UPDATE` statement.  In this searched update, the "back-end" application is looking for the _first_ request in `new` status (which it has not already seen before- more to come).
+**Note**
+There is a caveat to this approach.  It is entirely possible, although statistically impossible that two UUIDs can ever be created.  If this is a concern, another approach to obtain a truly unique identifier is through a sequence object in the database itself.  However, that has the drawback of additional database calls, entities, and permissions.
+
+Once the process identifier is generated, the "back-end" application executes a searched `UPDATE` statement.  In this searched update, the "back-end" application is looking for the _first_ request in `new` status (which it has not already seen before- more to come).
 
 Since the table also has a system-generated, ever-increasing unique identifier, the order of the rows is easily controlled.  By ordering on the request identifier, the application processes the requests in FIFO order.
 
