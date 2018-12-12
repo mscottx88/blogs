@@ -1,9 +1,9 @@
 # Implementing a Distributed Lock State Machine
-A complex distributed computing problem application developers may encounter is controlled access to a resource or entity in a multi-user, concurrency environment.  How can we assuredly guard against an arbitrary number of concurrent processes from potentially mutating or even having any access to an entity simulatenously?  One possible solution is to rely on database management systems which provide concurrency safeguards via ACID transactions and row-level locking.
+A complex distributed computing problem application developers may encounter is controlling access to a resource or entity in a multi-user, concurrent environment.  How can we guard against an arbitrary number of concurrent processes from potentially mutating or even having any access to an entity simultaneously?  One possible solution is to rely on database management systems which provide concurrency safeguards via ACID transactions and row-level locking.
 
 In this article, you'll learn how I combined various technologies like Postgres, SQL and Node.js and created an application which implements a Distributed Lock State Machine.
 
-In understanding the approaches taken here, you'll learn how commitment control, isolation levels, and ACID transaction guarantees can be applied to implement a Distributed Lock State Machine.  In this context, "distributed" means multiple concurrent processes.  Moreover, "lock" is the safety mechanism that safeguards against concurrent processes from gaining access to shared resources or entities simultaneously.  Finally, "state machine" means those concurrent processes will have the ability to identify a resource or entity in a specific state (i.e. `new`, `in-progress`), perform some work or processing on them and transition them to a final, settled state (i.e `complete`, `error`).
+In understanding the approaches taken here, you'll learn how commitment control, isolation levels, and ACID transaction guarantees can be applied to implement a distributed lock state machine.  In this context, "distributed" means multiple concurrent processes.  The "lock" is the safety mechanism that safeguards against concurrent processes from gaining access to shared resources or entities simultaneously.  Finally, "state machine" means those concurrent processes will have the ability to identify a resource or entity in a specific state (e.g. `new`, `in-progress`), perform some work or processing on them, and transition them to a final, settled state (e.g. `complete`, `error`).
 
 At the end, I'll provide additional examples of the implementation that can be applied to achieve robust data aggregation and replication without requiring changes to your existing applications.
 
@@ -155,7 +155,7 @@ const processId = uuid();
 **Note**
 There is a caveat to this approach.  It is entirely possible, although statistically impossible that two UUIDs can ever be created.  If this is a concern, another approach to obtain a truly unique identifier is through a sequence object in the database itself.  However, that has the drawback of additional database calls, entities, and permissions.
 
-Then, the "back-end" application executes a searched `UPDATE` statement.  In this searched update, the "back-end" application is looking for the _first_ request in `new` status (which it has not already seen before- more to come).
+Once the process identifier is generated, the "back-end" application executes a searched `UPDATE` statement.  In this searched update, the "back-end" application is looking for the _first_ request in `new` status (which it has not already seen before- more to come).
 
 Since the table also has a system-generated, ever-increasing unique identifier, the order of the rows is easily controlled.  By ordering on the request identifier, the application processes the requests in FIFO order.
 
