@@ -44,7 +44,8 @@ There are additional columns such as the URL to the spreadsheet, the identity of
 CREATE SEQUENCE spreadsheets.request_queue_id_seq;
 
 CREATE TABLE spreadsheets.request_queue (
-  request_queue_id BIGINT NOT NULL PRIMARY KEY DEFAULT NEXTVAL('spreadsheets.request_queue_id_seq'),
+  request_queue_id BIGINT NOT NULL PRIMARY KEY
+    DEFAULT NEXTVAL('spreadsheets.request_queue_id_seq'),
   request_status TEXT NOT NULL DEFAULT 'new',
   request_type TEXT NOT NULL DEFAULT 'create',
   process_id TEXT,
@@ -86,7 +87,7 @@ INSERT INTO spreadsheets.request_queue (
 )
 VALUES (
   'create', -- could be 'update' also
-  '9s9has9d81hd0a0891h0d90a881840f' -- the identity of the google spreadsheet
+  $1 -- the identity of the google spreadsheet
 );
 ```
 
@@ -213,7 +214,7 @@ To be able to `update` a spreadsheet, the previous `create` request must already
 SELECT true
 FROM spreadsheets.request_queue
 WHERE (
-  spreadsheet_id = $1 -- the identity of the spreadsheet discovered in UPDATE
+  spreadsheet_id = $1 -- spreadsheet discovered in UPDATE
   AND request_type = 'create'
   AND request_status NOT IN ('complete', 'error')
 )
@@ -248,7 +249,7 @@ WHERE (
       request_queue_id
     FROM spreadsheets.request_queue
     WHERE (
-      spreadsheet_id = $2 -- the identity of the spreadsheet discovered in UPDATE
+      spreadsheet_id = $2 -- spreadsheet discovered in UPDATE
       AND request_type = 'update'
       AND request_status NOT IN ('complete', 'error')
     )
