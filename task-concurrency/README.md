@@ -129,24 +129,50 @@ For the rows which are queried, the process determines if the sort key matches t
 **Example checking queue position**
 
 ```typescript
+/**
+ * In this example, the process iterates through pages of locks.
+ * Expired locks are captured for subsequent removal.
+ */
+
+const expiredLocks: Record<string, any>[] = [];
+const now = Date.now() / 1000;
+
 let page: Record<string, any>[] = [];
 let resumeAfter: Record<string, any> | undefined;
 
-({ Items: page, LastEvaluatedKey: resumeAfter } = await client
-  .query({
-    ConsistentRead: true,
-    ExclusiveStartKey: resumeAfter,
-    ExpressionAttributeValues: {
-      pk: 'identity-of-locked-entity',
-      sk: 'locked-for-some-reason/',
-    },
-    KeyConditionExpression: 'pk = :pk AND begins_with(sk, :sk)',
-    Limit: 100,
-    ScanIndexForward: true,
-    TableName: 'my-dynamodb-table',
-  })
-  .promise()
-);
+do {
+  ({ Items: page, LastEvaluatedKey: resumeAfter } = await client
+    .query({
+      ConsistentRead: true,
+      ExclusiveStartKey: resumeAfter,
+      ExpressionAttributeValues: {
+        pk: 'identity-of-locked-entity',
+        sk: 'locked-for-some-reason/',
+      },
+      KeyConditionExpression: 'pk = :pk AND begins_with(sk, :sk)',
+      Limit: 100,
+      ScanIndexForward: true,
+      TableName: 'my-dynamodb-table',
+    })
+    .promise()
+  );
+
+  for (const entry of page) {
+    if (entry.expiresAt < now) {
+      // capture expired locks for removal
+      expiredLocks.push(entry);
+    } else if (entry.sk === sk) {
+      // expired locks can be proactively deleted
+      // await Promise.all(expiredLocks.map( ... see below ... ));
+
+      // reached the front of queue
+      return true;
+    } else {
+      // not at front of queue; cannot proceed
+      return false;
+    }
+  }
+} while (resumeAfter);
 ```
 
 **Note** It is important that strongly consistent reads are enforced when checking the queue. This ensures that all pending updates to the partition key are applied before reading the queue.
@@ -155,7 +181,7 @@ Since DynamoDB implements pagination for queries, the process needs to iterate t
 
 If the first row of the first page has the matching sort key containing the ticket number obtained by the given process, then the process is the first in line and should proceed with its work.
 
-If the process is not first in the queue, then the process should sleep for a short period of time and re-check the queue.
+If the process is not first in the queue, then the process should sleep for a short period of time and re-check the queue. The polling interval should be fairly short, perhaps 500 milliseconds.
 
 If the process implements proactive deletion of expired locks, each row returned should be deleted if the expiration time is less than the current time.
 
