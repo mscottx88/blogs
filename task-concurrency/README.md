@@ -32,7 +32,7 @@ Imagine a set of processes as a FIFO (first-in, first-out) queue. The first such
 
 DynamoDB has a feature which can be used to create such a mechanism: atomic counters. An atomic counter in DynamoDB allows an application to update a row through incrementing the value. While the order of simultaneous processes accessing the counter is not guaranteed, the result is that no two processes will obtain the exact same result. Additionally, the value is atomically incremented and globally unique.
 
-**Note** DynamoDB supports integer values with up to 38 digits of precision. This means a ticket number can range between `1` and `99,999,999,999,999,999,999,999,999,999,999,999,999`. That's 99 _undecillion_ ticket numbers. Using this scheme, processes requesting one million ticket numbers per second every day, every year, would take `31,536,000,000,000` _years_ before the limit is reached.
+**Note** DynamoDB supports integer values with up to 38 digits of precision. This means a ticket number can range between `1` and `99,999,999,999,999,999,999,999,999,999,999,999,999`. That is 99 _undecillion_ ticket numbers. Using this scheme, processes requesting one million ticket numbers per second every day, every year, would take `31,536,000,000,000` _years_ before the limit is reached.
 
 The row holding the ticket number will need a common partition key value known to all processes. If the ticket number is shared across multiple disparate locks, then a simple name will suffice. If namespacing is desirable, then a more complex partition key with prefixes or a partition key combined with a sort key namespace is a possibility.
 
