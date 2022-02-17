@@ -8,7 +8,7 @@ In this article, you will learn by example, a pattern for developing Typescript 
 const authorization = await Authorization.new();
 ```
 
-2. This service makes it equally simple to compose multiple, arbitrarily nested services that implement this pattern. For example:
+2. This pattern also makes it equally simple to compose multiple, arbitrarily nested services that implement this pattern. For example:
 
 ```typescript
 const service = await Service.new();
@@ -53,7 +53,7 @@ export interface IServiceConfig {
 
 # Options Object
 
-In addition to the configuration object, your service will also declare the options sent to the constructor. The constructor will accept only one argument, this options object.
+In addition to the configuration object, your service will also declare the options sent to the `constructor`. The `constructor` will accept at least one argument, the options object.
 
 ```typescript
 export interface IServiceOptions {
@@ -61,7 +61,7 @@ export interface IServiceOptions {
 }
 ```
 
-> **Note** The `config` object is always present. Additional properties that are provided to the constructor would be those that cannot be determined automatically. These could be stateful parameters known only to the process running, for example.
+> **Note** The `config` object is always present. Additional properties that are provided to the `constructor` would include those that cannot be determined automatically. These might be stateful parameters known only to the process running, for example.
 
 # `getConfig`
 
@@ -122,7 +122,7 @@ This pattern can be repeated to any depth.
 
 # `new` Factory
 
-The final step is to create a factory function that can asynchronously instantiate these services.
+The final step is to create a `static` factory function that can asynchronously instantiate these services.
 
 The `Authorization` service `new` factory example:
 
@@ -141,7 +141,7 @@ public static async new(
 export type SomePartial<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 ```
 
-Finally, the higher order service consuming the fictitious `Authorization` service example:
+Finally, the higher order service consuming the fictitious `Authorization` service also has a `new` factory. For example:
 
 ```typescript
 public static async new(
